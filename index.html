@@ -74,10 +74,17 @@ const ld=(k,d)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}ca
 const sv=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){toast("儲存空間不足，請用較小的圖片");return false}};
 let cfg=Object.assign({url:"",code:"",id:"u"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),on:true,from:"09:00",to:"22:00",fs:16,mode:"day",cols:{day:{},night:{}},alpha:.85,font:"round"},ld("cfg",{}));
 let S=Object.assign({moods:{},notes:{},sos:{},people:{}},ld("data",{}));
-let joined=false,cSub="chart",colSel="bg",tab="mood",draft="",view="both",range=7,mf="all",first=true;
+let syncErr=false,joined=false,cSub="chart",colSel="bg",tab="mood",draft="",view="both",range=7,mf="all",first=true;
 const widget=location.hash==="#widget",remote=()=>cfg.url&&cfg.code;
 const base=()=>cfg.url.replace(/\/$/,"")+"/couples/"+encodeURIComponent(cfg.code);
-const api=(m,p,b,q)=>fetch(base()+p+".json"+(q||""),{method:m,body:b===undefined?undefined:JSON.stringify(b)}).then(r=>r.json());
+const api=(m,p,b,q)=>fetch(base()+p+".json"+(q||""),{method:m,body:b===undefined?undefined:JSON.stringify(b)}).then(async r=>{let j;try{j=await r.json()}catch(e){const x=new Error("bad");x.code="html";throw x}if(j&&typeof j.error==="string"){const x=new Error(j.error);x.code=r.status;throw x}return j});
+function errMsg(e){const c=e&&e.code,m=String(e&&e.message||"");
+  if(c===401||c===403||/permission/i.test(m))return"資料庫沒有開放存取：請到 Firebase 的 Realtime Database → 規則，貼上 README 的規則並按「發布」";
+  if(c===404||c==="html")return"找不到資料庫：請確認網址長得像 https://xxx-default-rtdb.firebaseio.com";
+  if(c===400)return"資料庫回應錯誤（"+m+"）：請檢查配對碼是否含有特殊符號";
+  return"連不上資料庫：請確認網址、網路連線（網址要用 https）"}
+function cleanUrl(u){u=(u||"").trim().replace(/\.json.*$/,"");if(u&&!/^https?:\/\//i.test(u))u="https://"+u;try{return new URL(u).origin}catch(e){return u}}
+const badCode=c=>/[.$#\[\]\/\s]/.test(c);
 const M=k=>MOODS.find(m=>m.k===k)||MOODS[0];
 const ico=m=>m.e;
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
@@ -102,7 +109,8 @@ function patch(c,id,f){if(blocked())return;Object.assign(S[c][id],f);persist();i
 function del(c,id){delete S[c][id];persist();if(remote())api("DELETE","/"+c+"/"+id).catch(()=>{});render()}
 async function pull(manual){
   if(!remote())return;
-  try{const K="?orderBy=%22%24key%22&limitToLast=",[pp,mo,no,so]=await Promise.all([api("GET","/people"),api("GET","/moods",K+500),api("GET","/notes",K+100),api("GET","/sos",K+30)]),r={people:pp,moods:mo,notes:no,sos:so};
+  try{const K="?orderBy=%22%24key%22&limitToLast=",get=(p,n)=>api("GET",p,undefined,K+n).catch(e=>{if(e.code===400)return api("GET",p);throw e});
+    const [pp,mo,no,so]=await Promise.all([api("GET","/people"),get("/moods",500),get("/notes",100),get("/sos",30)]),r={people:pp,moods:mo,notes:no,sos:so};
     const seen=new Set(Object.keys(S.moods)),prev={},pS={};
     Object.entries(S.moods).forEach(([k,v])=>prev[k]=v.reply||"");Object.entries(S.sos).forEach(([k,v])=>pS[k]=v.resp||"");
     S={moods:r.moods||{},notes:r.notes||{},sos:r.sos||{},people:r.people||{}};
@@ -114,7 +122,7 @@ async function pull(manual){
     first=false;persist();
     if(manual&&full())toast("這個身分不在這組配對裡，而且已經有兩位使用者了");
     if(!S.people[cfg.id]&&!joined)askName(full());
-    render();showSos()}catch(e){if(manual)toast("連線失敗，請檢查網址")}
+    if(manual===true&&!full())toast("同步成功 ✅");syncErr=false;render();showSos()}catch(e){if(manual||!syncErr)toast(errMsg(e));syncErr=true}
 }
 function askName(onlyLogin){
   if($("#nameov"))return;const o=document.createElement("div");o.className="ov";o.id="nameov";
@@ -125,7 +133,7 @@ function askName(onlyLogin){
   if(q("#nmok"))q("#nmok").onclick=()=>{const v=q("#nm").value.trim()||"我";joined=true;if(S.people[cfg.id])patch("people",cfg.id,{name:v});else put("people",cfg.id,{name:v});o.remove()};
   if(q("#nmx"))q("#nmx").onclick=()=>o.remove();
   if(q("#nclose"))q("#nclose").onclick=()=>{joined=true;o.remove()};
-  if(q("#nlogin"))q("#nlogin").onclick=async()=>{cfg.url=q("#nu").value.trim();cfg.code=q("#nc").value.trim();sv("cfg",cfg);if(await login(q("#nid").value))o.remove()};
+  if(q("#nlogin"))q("#nlogin").onclick=async()=>{cfg.url=cleanUrl(q("#nu").value);cfg.code=q("#nc").value.trim();if(badCode(cfg.code)){toast("配對碼不能有空格或 . $ # [ ] /");return}sv("cfg",cfg);if(await login(q("#nid").value))o.remove()};
 }
 async function login(v){
   v=String(v||"").trim().toLowerCase();
@@ -136,8 +144,8 @@ async function login(v){
     if(!pp[v]){toast("找不到這個身分碼，請確認有沒有輸入錯誤");return false}
     cfg.id=v;const st=pp[v].settings;if(st)Object.assign(cfg,st);
     sv("cfg",cfg);apply();first=true;joined=true;
-    await pull(true);render();toast("登入成功，資料與設定已同步 ✅");return true
-  }catch(e){toast("連線失敗，請檢查網址與網路");return false}
+    await pull("quiet");render();toast("登入成功，資料與設定已同步 ✅");return true
+  }catch(e){toast(errMsg(e));return false}
 }
 function showSos(){
   const s=arr("sos").find(x=>x.uid!==cfg.id&&!x.resp&&!sosDone.has(x.id)&&Date.now()-x.ts<6*3600e3),ex=$("#sosov");
@@ -224,7 +232,7 @@ document.addEventListener("click",e=>{
   if(t.id==="colreset"){cfg.cols[cfg.mode]={};saveCfg();apply();render();toast("已恢復"+(cfg.mode==="day"?"日間":"夜間")+"預設顏色");return}
   if(t.id==="cpid"){navigator.clipboard.writeText(cfg.id).then(()=>toast("已複製身分碼"),()=>toast("請手動複製身分碼"));return}
   if(t.id==="login"){login($("#lid").value);return}
-  if(t.id==="fsave"){cfg.url=$("#fu").value.trim();cfg.code=$("#fc").value.trim();saveCfg();first=true;toast("已儲存，同步中…");joined=false;pull(true);render()}
+  if(t.id==="fsave"){cfg.url=cleanUrl($("#fu").value);cfg.code=$("#fc").value.trim();if(/console\.firebase/.test(cfg.url)){toast("這是 Firebase 控制台網址，請貼資料庫網址（xxx.firebaseio.com）");return}if(badCode(cfg.code)){toast("配對碼不能有空格或 . $ # [ ] /");return}saveCfg();first=true;toast("已儲存，同步中…");joined=false;pull(true);render()}
 });
 document.addEventListener("input",e=>{const i=e.target.id;
   if(i==="draft")draft=e.target.value;

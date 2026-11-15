@@ -30,3 +30,9 @@
 
 ## 這是 PWA
 已包含 manifest、service worker（離線可開啟外殼）、圖示。放到 https 網址後即可「加入主畫面」。全程不需付費（見對話說明）。
+
+## 同步失敗時檢查
+1. 網址要是資料庫網址（xxx-default-rtdb.firebaseio.com 或 xxx.firebasedatabase.app），不是控制台網頁網址。
+2. 規則要貼上並按「發布」。
+3. 配對碼只用英數字與 - _，不要有空格或 . $ # [ ] /。
+4. 兩人的網址與配對碼必須完全相同。
