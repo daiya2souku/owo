@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f1f8ec">
 <link rel="manifest" href="manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="我家寶貝的小心情">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>我家寶貝的小心情</title>
@@ -73,7 +77,7 @@ let S=Object.assign({moods:{},notes:{},sos:{},people:{}},ld("data",{}));
 let joined=false,cSub="chart",colSel="bg",tab="mood",draft="",view="both",range=7,mf="all",first=true;
 const widget=location.hash==="#widget",remote=()=>cfg.url&&cfg.code;
 const base=()=>cfg.url.replace(/\/$/,"")+"/couples/"+encodeURIComponent(cfg.code);
-const api=(m,p,b)=>fetch(base()+p+".json",{method:m,body:b===undefined?undefined:JSON.stringify(b)}).then(r=>r.json());
+const api=(m,p,b,q)=>fetch(base()+p+".json"+(q||""),{method:m,body:b===undefined?undefined:JSON.stringify(b)}).then(r=>r.json());
 const M=k=>MOODS.find(m=>m.k===k)||MOODS[0];
 const ico=m=>m.e;
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
@@ -83,11 +87,13 @@ const nameOf=id=>id===cfg.id?"我":(S.people[id]&&S.people[id].name)||"對方";
 const colOf=id=>id===cfg.id?"var(--me)":"var(--you)";
 const fmt=t=>new Date(t).toLocaleString("zh-TW",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false});
 function inWin(){if(!cfg.on)return false;const d=new Date(),n=d.getHours()*60+d.getMinutes(),p=s=>{const a=s.split(":");return +a[0]*60+ +a[1]},f=p(cfg.from),t=p(cfg.to);return f<=t?(n>=f&&n<=t):(n>=f||n<=t)}
-function toast(m){const t=document.createElement("div");t.className="toast";t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),3500);try{if(window.Notification&&Notification.permission==="granted"&&document.hidden)new Notification("我家寶貝的小心情",{body:m})}catch(e){}}
+function toast(m){const t=document.createElement("div");t.className="toast";t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),3500);try{const LN=window.Capacitor&&Capacitor.Plugins&&Capacitor.Plugins.LocalNotifications;if(document.hidden){if(LN)LN.schedule({notifications:[{id:Date.now()%2147483000,title:"我家寶貝的小心情",body:m}]});else if(window.Notification&&Notification.permission==="granted")new Notification("我家寶貝的小心情",{body:m})}}catch(e){}}
 const colors=()=>Object.assign({},DEF[cfg.mode]||DEF.day,(cfg.cols&&cfg.cols[cfg.mode])||{});
 function apply(){const c=colors(),r=document.documentElement.style;for(const k in c)r.setProperty("--"+k,c[k]);r.setProperty("--onacc",lum(c.accent)>.4?"#2b3a30":"#ffffff");r.setProperty("--fs",cfg.fs+"px");r.setProperty("--alpha",cfg.alpha);r.setProperty("--font",FONTS[cfg.font]||FONTS.round);r.colorScheme=cfg.mode==="night"?"dark":"light";const m=document.querySelector('meta[name=theme-color]');if(m)m.content=c.bg}
 /* data layer: local, plus Firebase Realtime Database REST if configured */
 const persist=()=>sv("data",S);
+const SETK=["on","from","to","fs","alpha","font","mode","cols"];let sT=null;
+function saveCfg(){sv("cfg",cfg);if(remote()&&S.people[cfg.id]){clearTimeout(sT);sT=setTimeout(()=>{const st={};SETK.forEach(k=>st[k]=cfg[k]);S.people[cfg.id].settings=st;persist();api("PUT","/people/"+cfg.id+"/settings",st).catch(()=>{})},800)}}
 const full=()=>remote()&&!S.people[cfg.id]&&Object.keys(S.people).length>=2;
 const blocked=()=>{if(full()){toast("這組配對碼已經有兩位使用者了");return true}return false};
 const sosDone=new Set();
@@ -96,7 +102,7 @@ function patch(c,id,f){if(blocked())return;Object.assign(S[c][id],f);persist();i
 function del(c,id){delete S[c][id];persist();if(remote())api("DELETE","/"+c+"/"+id).catch(()=>{});render()}
 async function pull(manual){
   if(!remote())return;
-  try{const r=await api("GET","")||{};
+  try{const K="?orderBy=%22%24key%22&limitToLast=",[pp,mo,no,so]=await Promise.all([api("GET","/people"),api("GET","/moods",K+500),api("GET","/notes",K+100),api("GET","/sos",K+30)]),r={people:pp,moods:mo,notes:no,sos:so};
     const seen=new Set(Object.keys(S.moods)),prev={},pS={};
     Object.entries(S.moods).forEach(([k,v])=>prev[k]=v.reply||"");Object.entries(S.sos).forEach(([k,v])=>pS[k]=v.resp||"");
     S={moods:r.moods||{},notes:r.notes||{},sos:r.sos||{},people:r.people||{}};
@@ -107,13 +113,31 @@ async function pull(manual){
       arr("sos").forEach(x=>{if(x.uid===cfg.id&&x.resp&&x.id in pS&&!pS[x.id])toast(nameOf(partner())+(x.resp==="come"?" 說：我馬上來 🏃":" 說：我正在忙")+(x.respText?"「"+x.respText+"」":""))})}
     first=false;persist();
     if(manual&&full())toast("這個身分不在這組配對裡，而且已經有兩位使用者了");
-    if(!S.people[cfg.id]&&!full()&&!joined)askName();
+    if(!S.people[cfg.id]&&!joined)askName(full());
     render();showSos()}catch(e){if(manual)toast("連線失敗，請檢查網址")}
 }
-function askName(){
+function askName(onlyLogin){
   if($("#nameov"))return;const o=document.createElement("div");o.className="ov";o.id="nameov";
-  o.innerHTML='<div class="box"><div style="font-size:40px">🐰</div><p>先取一個可愛的名字吧</p><input type="text" id="nm" maxlength="8" placeholder="例如：小熊"><p></p><button class="btn" id="nmok">開始</button></div>';
-  document.body.appendChild(o);$("#nmok").onclick=()=>{joined=true;put("people",cfg.id,{name:$("#nm").value.trim()||"我"});o.remove()};
+  const has=!!S.people[cfg.id],ni='autocapitalize="none" autocorrect="off" spellcheck="false"';
+  o.innerHTML='<div class="box" style="max-height:90vh;overflow:auto"><div style="font-size:40px">🐰</div>'+(onlyLogin?'<p>這組配對碼已經有兩位使用者了。<br>如果你是其中一位，請用身分碼登入。</p>':'<p>'+(has?"改一個新名字吧":"先取一個可愛的名字吧")+'</p><input type="text" id="nm" maxlength="8" placeholder="例如：小熊" value="'+(has?esc(S.people[cfg.id].name):"")+'"><div class="row" style="margin-top:10px"><button class="btn" id="nmok">'+(has?"儲存":"開始")+'</button>'+(has?'<button class="btn ghost" id="nmx">取消</button>':"")+"</div>")+(has&&!onlyLogin?"":'<details style="margin-top:14px;text-align:left"'+(onlyLogin?" open":"")+'><summary class="meta" style="cursor:pointer;text-align:center">已經有身分碼？用身分碼登入</summary><div class="meta" style="margin:8px 0 4px">同步資料（和對方相同）</div><input type="url" id="nu" placeholder="資料庫網址" value="'+esc(cfg.url)+'" '+ni+'><p style="margin:4px 0"></p><input type="text" id="nc" placeholder="配對碼" value="'+esc(cfg.code)+'" '+ni+'><div class="meta" style="margin:8px 0 4px">我的身分碼</div><input type="text" id="nid" placeholder="在另一台裝置的設定裡複製" '+ni+'><div class="row" style="margin-top:10px"><button class="btn ghost" id="nlogin">登入</button>'+(onlyLogin?'<button class="btn ghost" id="nclose">先看看</button>':"")+"</div></details>")+"</div>";
+  document.body.appendChild(o);
+  const q=x=>o.querySelector(x);
+  if(q("#nmok"))q("#nmok").onclick=()=>{const v=q("#nm").value.trim()||"我";joined=true;if(S.people[cfg.id])patch("people",cfg.id,{name:v});else put("people",cfg.id,{name:v});o.remove()};
+  if(q("#nmx"))q("#nmx").onclick=()=>o.remove();
+  if(q("#nclose"))q("#nclose").onclick=()=>{joined=true;o.remove()};
+  if(q("#nlogin"))q("#nlogin").onclick=async()=>{cfg.url=q("#nu").value.trim();cfg.code=q("#nc").value.trim();sv("cfg",cfg);if(await login(q("#nid").value))o.remove()};
+}
+async function login(v){
+  v=String(v||"").trim().toLowerCase();
+  if(!v){toast("請輸入身分碼");return false}
+  if(!remote()){toast("請先填入資料庫網址與配對碼");return false}
+  try{
+    const pp=await api("GET","/people")||{};
+    if(!pp[v]){toast("找不到這個身分碼，請確認有沒有輸入錯誤");return false}
+    cfg.id=v;const st=pp[v].settings;if(st)Object.assign(cfg,st);
+    sv("cfg",cfg);apply();first=true;joined=true;
+    await pull(true);render();toast("登入成功，資料與設定已同步 ✅");return true
+  }catch(e){toast("連線失敗，請檢查網址與網路");return false}
 }
 function showSos(){
   const s=arr("sos").find(x=>x.uid!==cfg.id&&!x.resp&&!sosDone.has(x.id)&&Date.now()-x.ts<6*3600e3),ex=$("#sosov");
@@ -182,7 +206,7 @@ function setHtml(){
   let h='<h1>🌷 設定</h1><div class="card"><b>🎨 外觀</b><div class="chips" style="margin:8px 0"><button class="chip '+(cfg.mode==="day"?"on":"")+'" data-mode="day">☀️ 日間</button><button class="chip '+(cfg.mode==="night"?"on":"")+'" data-mode="night">🌙 夜間</button></div>'+sl("fs","文字大小",12,24,1,cfg.fs)+'<div class="sw"><span style="white-space:nowrap">調整顏色</span><select id="colsel" style="width:auto;flex:1">'+COLS.map(c=>'<option value="'+c[0]+'"'+(colSel===c[0]?" selected":"")+">"+c[1]+"</option>").join("")+'</select><input type="color" data-col="'+colSel+'" value="'+colors()[colSel]+'"></div><div class="meta">目前編輯：'+(cfg.mode==="day"?"日間":"夜間")+"模式</div>"+sl("al","區塊透明度",.2,1,.05,cfg.alpha)+'<div class="sw"><span>字體</span><select id="fo" style="width:auto"><option value="round"'+(cfg.font==="round"?" selected":"")+'>可愛圓體</option><option value="hand"'+(cfg.font==="hand"?" selected":"")+'>手寫風</option><option value="sys"'+(cfg.font==="sys"?" selected":"")+'>系統預設</option></select></div><div class="row"><button class="btn ghost" id="colreset">恢復預設顏色</button></div></div>';
   h+='<div class="card"><b>🔔 通知</b><div class="sw"><span>接收對方心情通知</span><button class="chip '+(cfg.on?"on":"")+'" id="tgl">'+(cfg.on?"開":"關")+'</button></div><div class="meta">只在這段時間內通知我</div><div style="display:flex;gap:8px;align-items:center;margin-top:6px"><input type="time" id="tf" value="'+cfg.from+'"><span>～</span><input type="time" id="tt" value="'+cfg.to+'"></div><div class="meta" style="margin-top:8px">目前'+(inWin()?"在通知時段內 ✅":"不在通知時段 🌙")+"</div></div>";
   h+='<div class="card"><b>💞 和對方同步</b><div class="meta" style="margin:4px 0 8px">兩人填入相同的資料庫網址與配對碼（最多 2 人，作法見 README）</div><input type="url" id="fu" placeholder="https://你的專案-default-rtdb.firebaseio.com" value="'+esc(cfg.url)+'"><p style="margin:6px 0"></p><input type="text" id="fc" placeholder="配對碼（自訂一串難猜的字）" value="'+esc(cfg.code)+'"><div class="row" style="margin-top:8px"><button class="btn" id="fsave">儲存並同步</button></div></div>';
-  h+='<div class="card"><b>🔑 我的身分</b><div class="meta" style="margin:4px 0 8px">換手機或多台裝置時，在另一台輸入同一個身分碼，就能用同一個身分登入。請不要分享給別人。</div><div class="sw"><code style="word-break:break-all">'+esc(cfg.id)+'</code><button class="chip" id="cpid">複製</button></div><input type="text" id="lid" placeholder="在這台輸入另一台的身分碼"><div class="row" style="margin-top:8px"><button class="btn" id="login">登入此身分</button></div></div>';
+  h+='<div class="card"><b>🔑 我的身分</b><div class="meta" style="margin:4px 0 8px">換手機或多台裝置時，在另一台輸入同一個身分碼，就能用同一個身分登入。請不要分享給別人。</div><div class="sw"><code style="word-break:break-all">'+esc(cfg.id)+'</code><button class="chip" id="cpid">複製</button></div><input type="text" id="lid" placeholder="在這台輸入另一台的身分碼" autocapitalize="none" autocorrect="off" spellcheck="false"><div class="row" style="margin-top:8px"><button class="btn" id="login">登入此身分</button></div></div>';
   return h+'<div class="card"><div class="sw"><span>🐰 我的名字</span><button class="chip" id="rename">'+esc(nameOf(cfg.id))+' ✎</button></div><div class="sw"><span>🧩 小工具模式</span><a class="btn ghost" href="#widget" onclick="setTimeout(()=>location.reload(),50)">開啟</a></div><div class="meta">把小工具模式加到手機主畫面，就能一鍵送心情。</div></div>';
 }
 /* events */
@@ -190,27 +214,27 @@ document.addEventListener("click",e=>{
   const t=e.target.closest("button,i");if(!t)return;const d=t.dataset;
   if(d.tab){tab=d.tab;render();return}
   if(d.view){view=d.view;render();return}if(d.range){range=+d.range;render();return}if(d.sub){cSub=d.sub;render();return}
-  if(d.mode){cfg.mode=d.mode;sv("cfg",cfg);apply();render();return}
+  if(d.mode){cfg.mode=d.mode;saveCfg();apply();render();return}
   if(d.mood){const ta=$("#draft"),text=ta?ta.value.trim():"";draft="";if(ta)ta.value="";put("moods",uid(),{uid:cfg.id,mood:d.mood,text,ts:Date.now()});toast(M(d.mood).e+" 已送出");return}
   if(d.reply){patch("moods",d.id,{reply:d.reply,replyBy:cfg.id});return}
   if(t.id==="nsend"){const v=$("#ntxt").value.trim();if(!v)return;put("notes",uid(),{uid:cfg.id,text:v,ts:Date.now(),color:NOTECOL[Math.floor(Math.random()*5)]});toast("💌 小紙條已貼上");return}
   if(d.delnote){del("notes",d.delnote);return}
-  if(t.id==="tgl"){cfg.on=!cfg.on;sv("cfg",cfg);try{if(cfg.on&&window.Notification&&Notification.permission==="default")Notification.requestPermission()}catch(x){}render();return}
+  if(t.id==="tgl"){cfg.on=!cfg.on;saveCfg();try{if(cfg.on&&window.Notification&&Notification.permission==="default")Notification.requestPermission()}catch(x){}render();return}
   if(t.id==="rename"){askName();return}
-  if(t.id==="colreset"){cfg.cols[cfg.mode]={};sv("cfg",cfg);apply();render();toast("已恢復"+(cfg.mode==="day"?"日間":"夜間")+"預設顏色");return}
+  if(t.id==="colreset"){cfg.cols[cfg.mode]={};saveCfg();apply();render();toast("已恢復"+(cfg.mode==="day"?"日間":"夜間")+"預設顏色");return}
   if(t.id==="cpid"){navigator.clipboard.writeText(cfg.id).then(()=>toast("已複製身分碼"),()=>toast("請手動複製身分碼"));return}
-  if(t.id==="login"){const v=$("#lid").value.trim();if(!v)return;cfg.id=v;sv("cfg",cfg);first=true;joined=false;toast("登入中…");pull(true);render();return}
-  if(t.id==="fsave"){cfg.url=$("#fu").value.trim();cfg.code=$("#fc").value.trim();sv("cfg",cfg);first=true;toast("已儲存，同步中…");joined=false;pull(true);render()}
+  if(t.id==="login"){login($("#lid").value);return}
+  if(t.id==="fsave"){cfg.url=$("#fu").value.trim();cfg.code=$("#fc").value.trim();saveCfg();first=true;toast("已儲存，同步中…");joined=false;pull(true);render()}
 });
 document.addEventListener("input",e=>{const i=e.target.id;
   if(i==="draft")draft=e.target.value;
   if(i==="fs"){cfg.fs=+e.target.value;apply()}if(e.target.dataset.col){cfg.cols[cfg.mode]=cfg.cols[cfg.mode]||{};cfg.cols[cfg.mode][e.target.dataset.col]=e.target.value;apply()}if(i==="al"){cfg.alpha=+e.target.value;apply()}});
 document.addEventListener("change",async e=>{const i=e.target.id,t=e.target;
-  if(["fs","al"].includes(i)||t.dataset.col)sv("cfg",cfg);
+  if(["fs","al"].includes(i)||t.dataset.col)saveCfg();
   if(i==="colsel"){colSel=t.value;t.blur();render()}
   if(i==="mfsel"){mf=t.value;t.blur();render()}
-  if(i==="fo"){cfg.font=t.value;sv("cfg",cfg);apply()}
-  if(i==="tf"||i==="tt"){cfg[i==="tf"?"from":"to"]=t.value;sv("cfg",cfg);render()}
+  if(i==="fo"){cfg.font=t.value;saveCfg();apply()}
+  if(i==="tf"||i==="tt"){cfg[i==="tf"?"from":"to"]=t.value;saveCfg();render()}
 });
 document.addEventListener("focusout",()=>setTimeout(render,80));
 let hT=null,hS=0;
@@ -221,7 +245,8 @@ document.addEventListener("contextmenu",e=>{if(e.target.closest("#sosbtn"))e.pre
 function confirmSos(){const o=document.createElement("div");o.className="ov";o.innerHTML='<div class="box"><div style="font-size:44px">🥺</div><p>要通知對方「我現在需要陪伴」嗎？</p><textarea id="sostx2" maxlength="80" placeholder="想說點什麼嗎？（可不填）"></textarea><div class="row" style="margin-top:10px"><button class="btn" id="y">是的，請來陪我</button><button class="btn ghost" id="n">按錯了</button></div></div>';document.body.appendChild(o);o.querySelector("#n").onclick=()=>o.remove();o.querySelector("#y").onclick=()=>{put("sos",uid(),{uid:cfg.id,ts:Date.now(),text:o.querySelector("#sostx2").value.trim()});o.remove();toast("已通知對方，你不是一個人 💗")}}
 window.addEventListener("hashchange",()=>location.reload());
 apply();render();if(!remote()&&!S.people[cfg.id])setTimeout(askName,400);
-pull();setInterval(pull,5000);
+pull();setInterval(()=>{if(!document.hidden)pull()},10000);document.addEventListener("visibilitychange",()=>{if(!document.hidden)pull()});
+try{const LN=window.Capacitor&&Capacitor.Plugins&&Capacitor.Plugins.LocalNotifications;if(LN)LN.requestPermissions()}catch(e){}
 if("serviceWorker"in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>
